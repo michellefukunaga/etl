@@ -1,0 +1,51 @@
+drop table if exists root.michellefukunaga.daily_mixpanel;
+create table root.michellefukunaga.daily_mixpanel as (
+with daily_mixpanel as (
+	select date_trunc('day', event_timestamp) as event_date,
+		m.account_id,
+		m.user_id,
+		t.test_drive_development_day,
+		t.test_drive_development_week,
+				
+		--score card--
+		sum(case when event_name in ('DRIVER_SCORE_CARD_SEEN', 'DAY_ZERO_SCORE_CARD_SCREEN','DRIVER_SCORE_CARD_SCREEN') then 1 else 0 end) as score_card,
+		sum(case when event_name in ('DAY_ZERO_SCORE_CARD_LEARN_MORE','DRIVER_SCORE_CARD_LEARN_MORE') then 1 else 0 end) as score_card_learn_more,
+		sum(case when event_name in ('DRIVING_PROGRESS_SCREEN','DAY_ZERO_DAYS_TO_GO') then 1 else 0 end) as driving_progress,
+		
+		--app open--
+--		sum(case when event_name = 'APP_STATE_CHANGED' and app_state_changed_state = 'active' then 1 else 0 end) as app_open,
+		sum(case when (event_name ilike '%pressed' or event_name ilike '%opened%' or event_name ilike '%view%' or event_name ilike '%screen' or event_name ilike '%tap' or event_name ilike '%seen') then 1 else 0 end) as app_open,
+		
+		--driving score menu
+		sum(case when event_name in ('HOME_DAY_ZERO_HAMBURGER_MENU_DRIVING_SCORE_PRESSED', 'HOME_POLICYHOLDER_HAMBURGER_MENU_DRIVING_SCORE_PRESSED','HOME_CLASSIC_HAMBURGER_MENU_DRIVING_SCORE_PRESSED','DAY_ZERO_CHECK_DRIVING_SCORE_CARD_VIEW_SCORECARD_PRESSED','VIEW_DRIVING_SCORE_PRESSED','score_card') then 1 else 0 end) as driving_score_menu_click,
+		--driver menu
+		sum(case when event_name in ('HOME_DAY_ZERO_HAMBURGER_MENU_DRIVERS_PRESSED','HOME_CLASSIC_HAMBURGER_MENU_DRIVERS_PRESSED') then 1 else 0 end) as driver_menu_click,
+		--referral menu
+		sum(case when event_name in ('HOME_DAY_ZERO_HAMBURGER_MENU_REFER_PRESSED', 'HOME_POLICYHOLDER_HAMBURGER_MENU_REFER_PRESSED','HOME_CLASSIC_HAMBURGER_MENU_REFER_PRESSED','DAY_ZERO_REFERRAL_CARD_OPENED','referral') then 1 else 0 end) as referral_menu_click,
+		--policy menu
+		sum(case when event_name in ('HOME_DAY_ZERO_HAMBURGER_MENU_AUTO_POLICY_PRESSED', 'HOME_POLICYHOLDER_HAMBURGER_MENU_AUTO_POLICY_PRESSED','POLICY_CARD_OPENED') then 1 else 0 end) as policy_menu_click,
+		--account menu
+		sum(case when event_name in ('HOME_DAY_ZERO_HAMBURGER_MENU_ACCOUNT_PRESSED', 'HOME_POLICYHOLDER_HAMBURGER_MENU_ACCOUNT_PRESSED','DAY_ZERO_ACCOUNT_DETAILS_CARD_OPENED') then 1 else 0 end) as account_menu,
+		--profile menu 
+		sum(case when event_name in ('HOME_CLASSIC_HAMBURGER_MENU_PROFILE_PRESSED','profile') then 1 else 0 end) as profile_menu,
+		--payment menu
+		sum(case when event_name in ('HOME_DAY_ZERO_HAMBURGER_MENU_PAYMENTS_PRESSED','HOME_POLICYHOLDER_HAMBURGER_MENU_PAYMENTS_PRESSED') then 1 else 0 end) as payment_menu,
+		--claims roadside
+		sum(case when event_name in ('HOME_DAY_ZERO_HAMBURGER_MENU_CLAIMS_AND_ROADSIDE_PRESSED','HOME_POLICYHOLDER_HAMBURGER_MENU_CLAIMS_AND_ROADSIDE_PRESSED','CLAIMS_CARD_OPENED') then 1 else 0 end) as claims_menu,
+		--promo menu
+		sum(case when event_name in ('HOME_CLASSIC_HAMBURGER_MENU_PROMO_PRESSED','HOME_DAY_ZERO_HAMBURGER_MENU_PROMO_PRESSED','promo_redemption') then 1 else 0 end) as promo_menu,
+		--achievements-- 
+		sum(case when event_name in ('HOME_DAY_ZERO_HAMBURGER_MENU_ACHIEVEMENTS_PRESSED','HOME_CLASSIC_HAMBURGER_MENU_ACHIEVEMENTS_PRESSED','HOME_POLICYHOLDER_HAMBURGER_MENU_ACHIEVEMENTS_PRESSED','ACHIEVEMENTS_DAY_ZERO_HOME_PRESSED','ACHIEVEMENTS_PREBIND_HOME_PRESSED') then 1 else 0 end) as achievements_menu, 
+		--support
+		sum(case when event_name in ('HOME_CLASSIC_MENU_HELP_AND_SUPPORT_PRESSED','DAY_ZERO_MENU_HELP_AND_SUPPORT_PRESSED','POLICYHOLDER_MENU_HELP_AND_SUPPORT_PRESSED','PREBIND_HOME_HOME_CLASSIC_MENU_HELP_AND_SUPPORT_PRESSED') then 1 else 0 end) as help_menu
+		
+	from mixpanel_mart.events m
+--		right join michellefukunaga.telematics_eligibility t on m.user_id = t.user_id and date_trunc('day', m.event_timestamp) >= t.test_drive_start_date and date_trunc('day', m.event_timestamp) <= t.test_drive_end_date
+		left join root.michellefukunaga.daily_tele t on t.user_id = m.user_id and date_trunc('day', m.event_timestamp) = t.trip_date
+
+	group by 1,2,3,4,5
+	
+)
+	select * from daily_mixpanel
+	
+);
