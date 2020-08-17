@@ -1,0 +1,77 @@
+create table root.michellefukunaga.installs as 
+(	WITH device_dup as (
+		select device_unique_id,
+			count(distinct users.account_id) as counts
+		from server_public.installs i
+			join server_public.users on i.user_id = users.id
+		group by 1
+		having counts > 1
+),
+	
+	all_installs as 
+	(
+		select distinct device_unique_id,
+		min(install_date) as install_date,
+		max(user_id) as user_id
+		from (
+			select distinct device_unique_id,
+			user_id,
+			created_at::DATE as install_date,
+			client_version,
+			ROW_NUMBER() OVER (PARTITION BY device_unique_id ORDER BY created_at ASC) AS rn
+		from server_public.installs
+			where install_date >= '2020-01-01'
+		)
+		where rn = 1
+		group by 1
+	),
+	
+	mixpanel_data AS  
+	(	 
+		select distinct i.device_unique_id,
+		MAX(CASE WHEN event_name = 'SPLASH_SCREEN' THEN e.os END) AS os,
+		MAX(CASE WHEN event_name = 'SPLASH_SCREEN' THEN e.app_version END) AS app_version,
+		-- MIN(CASE WHEN event_name = 'SPLASH_SCREEN' THEN event_timestamp END) AS initial_splash_timestamp,
+		MAX(CASE WHEN event_name = 'SPLASH_SCREEN' THEN 1 ELSE 0 END) AS splash,
+		max(case when e.event_name = 'PERMISSIONS_SCREEN' then 1 else 0 end) as permission_screen	
+	FROM mixpanel_mart.events e
+			join app_domain.installs i on e.mixpanel_distinct_id = i.mixpanel_distinct_id and i.device_unique_id in (select distinct device_unique_id from all_installs)
+	WHERE event_timestamp::DATE >= '2020-01-01'
+		and not e.mixpanel_distinct_id = '00000000-0000-0000-0000-000000000000'
+	GROUP BY 1
+	)
+	
+	select device_unique_id,
+		user_id,
+		install_date,
+		os,
+		app_version,
+		permission_screen
+	from (
+		select i.device_unique_id,
+		i.user_id,
+		i.install_date,
+		m.os,
+		m.app_version,
+		m.permission_screen,
+		ROW_NUMBER() OVER (PARTITION BY i.user_id ORDER BY install_date ASC) AS rn
+	from all_installs i
+		join mixpanel_data m on i.device_unique_id = m.device_unique_id
+	where not i.device_unique_id in (select distinct device_unique_id from device_dup)
+		and i.user_id is not null
+	)
+	where rn = 1
+	
+	union
+	
+	select i.device_unique_id,
+		i.user_id,
+		i.install_date,
+		m.os,
+		m.app_version,
+		m.permission_screen
+	from all_installs i
+		join mixpanel_data m on i.device_unique_id = m.device_unique_id
+	where not i.device_unique_id in (select distinct device_unique_id from device_dup)
+		and i.user_id is null
+);
