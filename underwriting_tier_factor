@@ -1,0 +1,18 @@
+drop table if exists root.michellefukunaga.ubi;
+create table root.michellefukunaga.ubi as (
+	select *
+	from (
+	    SELECT
+			rate_id,
+			coverage_symbol,
+			coverage_limits,
+			vin,
+			key,
+			factor as ubi_tier_factor,
+			row_number() over (partition by rate_id order by created_at desc) as rn
+	    FROM natepolek.rates_key_values 
+	    where key = 'underwriting_tier_factor'
+	    and coverage_symbol = 'bi'
+	)sub
+	where rn = 1
+);
