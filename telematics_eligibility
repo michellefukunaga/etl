@@ -50,56 +50,66 @@ create table root.michellefukunaga.telematics_eligibility as (
 			eligible_at as ubi_eligible_date,
 			push_to_no_use as ubi_ptnu
 		FROM (SELECT
-				ubi.telematics_user_id,
+			ubi.telematics_user_id,
 				ubi.created_at AS eligible_at,
 				ubi.push_to_no_use,
 				ROW_NUMBER() OVER (PARTITION BY ubi.telematics_user_id ORDER BY ubi.created_at ASC) AS rank
-				FROM app_daveability.ubi2_scoring_details ubi
-				WHERE eligible = 1
-				AND created_at::DATE = as_of_date::DATE 
+			FROM app_daveability.telematics_scoring_results ubi
+			WHERE eligible = 1
+				and ubi.scoring_model = 'ubi2'
+				and created_at::DATE = as_of_date::DATE 
 		) 	
 		WHERE rank = 1
 	),
 	
+	last_trip as (
+		select telematics_user_id,
+			max(trip_timestamp) as last_trip_timestamp
+		from (
+			select t.telematics_user_id,
+				t.created_at as trip_timestamp
+			from app_telematics.trips t
+				join eligible e on t.telematics_user_id = e.telematics_user_id and t.created_at <= e.ubi_eligible_date
+		)
+		group by 1
+	),
+	
 	telematics_eligibility AS
 	(
-		SELECT
-		distinct ta.account_id,
+		SELECT distinct ta.account_id,
 		ta.telematics_user_id,
 		ta.user_id,
 		ta.os,
-		case when fca.first_trip_recorded_timestamp < fca.profile_created_timestamp then fca.profile_created_timestamp
-			else fca.first_trip_recorded_timestamp 
+		fca.first_trip_recorded_timestamp,
+		last_trip_timestamp,
+		case when datediff(d, fca.first_trip_recorded_timestamp, fca.profile_created_timestamp) >= 50 then fca.profile_created_timestamp
+			else coalesce(fca.first_trip_recorded_timestamp, fca.profile_created_timestamp)
 		end as test_drive_start_date,
 		case when e.ubi_eligible_date < fca.underwriting_decision_timestamp then e.ubi_eligible_date 
-			else fca.underwriting_decision_timestamp
+			else coalesce(fca.underwriting_decision_timestamp, dateadd('day', 45, test_drive_start_date))
 		end as test_drive_end_date,
-		datediff('day', test_drive_start_date, test_drive_end_date) as trip_development_days,
+		case when datediff('day', sysdate, test_drive_end_date) > 0 then datediff('day', test_drive_start_date, sysdate) 
+			else datediff('day', test_drive_start_date, test_drive_end_date) 
+		end as trip_development_days,
 		fca.policy_bound_timestamp,
 		fca.final_bind_timestamp,
 		fca.profile_created_timestamp,
 		e.ubi_eligible_date relevant_eligible_date,
 		e.ubi_ptnu relevant_ptnu,
-		
-		fca.underwriting_decisions_by_day,
-		fca.day_zero_underwriting_decisions_by_day,
-		fca.final_binds_by_day,
-		
+	
 		CASE WHEN e.ubi_eligible_date IS NULL THEN 'Not Eligible'
 			WHEN datediff(d,test_drive_start_date,e.ubi_eligible_date) <= 45 AND ubi_ptnu = 0 THEN 'Eligible'
-			WHEN (ubi_ptnu = 1 OR datediff(d,test_drive_start_date,e.ubi_eligible_date) > 45) AND DATEDIFF(h, MAX(t.created_at), e.ubi_eligible_date) > 48 THEN 'Forced Push To No Use'
-			WHEN (ubi_ptnu = 1 OR datediff(d,test_drive_start_date, e.ubi_eligible_date) > 45) AND DATEDIFF(h, MAX(t.created_at), e.ubi_eligible_date) <= 48 THEN 'Push To No Use'
+			WHEN (ubi_ptnu = 1 OR datediff(d,test_drive_start_date,e.ubi_eligible_date) > 45) AND DATEDIFF(h, l.last_trip_timestamp, e.ubi_eligible_date) > 48 THEN 'Forced Push To No Use'
+			WHEN (ubi_ptnu = 1 OR datediff(d,test_drive_start_date, e.ubi_eligible_date) > 45) AND DATEDIFF(h, l.last_trip_timestamp, e.ubi_eligible_date) <= 48 THEN 'Push To No Use'
 		END AS eligible_flag
-			
-		case when eligible_flag = 'Eligible' then 1 else 0 end as telematics_eligibile_by_day
 		
 		FROM accounts ta
 			join edw.fact_conversion_accumulating fca on fca.account_id = ta.account_id and fca.is_current = TRUE
 			LEFT JOIN eligible e ON ta.telematics_user_id = e.telematics_user_id
-			LEFT JOIN telematics_public.trips t ON t.created_at <= e.ubi_eligible_date AND t.telematics_user_id = ta.telematics_user_id
+			LEFT JOIN last_trip l on ta.telematics_user_id = l.telematics_user_id
+
 		WHERE ta.account_classification = 'CLASSIC'
---			and fca.as_of_date = dateadd(day, 45, test_drive_start_date)
-		GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+
 		
 		UNION ALL
 
