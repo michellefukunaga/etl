@@ -81,7 +81,7 @@ create table root.michellefukunaga.telematics_eligibility as (
 		ta.user_id,
 		ta.os,
 		fca.first_trip_recorded_timestamp,
-		last_trip_timestamp,
+		l.last_trip_timestamp,
 		case when datediff(d, fca.first_trip_recorded_timestamp, fca.profile_created_timestamp) >= 50 then fca.profile_created_timestamp
 			else coalesce(fca.first_trip_recorded_timestamp, fca.profile_created_timestamp)
 		end as test_drive_start_date,
@@ -118,6 +118,8 @@ create table root.michellefukunaga.telematics_eligibility as (
 		ta.telematics_user_id,
 		ta.user_id,
 		ta.os,
+		fca.first_trip_recorded_timestamp,
+		l.last_trip_timestamp,
 		fca.policy_bound_timestamp as test_drive_start_date,
 		coalesce(fca.day_zero_underwriting_decision_timestamp, dateadd(day, 30, test_drive_start_date)) as test_drive_end_date,
 		fca.policy_development_days as trip_development_days,
@@ -126,27 +128,22 @@ create table root.michellefukunaga.telematics_eligibility as (
 		fca.profile_created_timestamp,
 		e.ubi_eligible_date relevant_eligible_date,
 		e.ubi_ptnu relevant_ptnu,
-
-		fca.underwriting_decisions_by_day,
-		fca.day_zero_underwriting_decisions_by_day,
-		final_binds_by_day,
 				
 		CASE WHEN e.ubi_eligible_date IS NULL AND datediff(d,test_drive_start_date, GETDATE()::DATE) < trip_development_days THEN 'Not Eligible'
 	            WHEN e.ubi_eligible_date IS NULL AND datediff(d,test_drive_start_date, GETDATE()::DATE) > 30 THEN 'Push To No Use'
 				WHEN datediff(d, test_drive_start_date, e.ubi_eligible_date) <= trip_development_days AND ubi_ptnu = 0 THEN 'Eligible'
 				WHEN datediff(d, test_drive_start_date, e.ubi_eligible_date) > trip_development_days OR ubi_ptnu = 1 THEN 'Push To No Use'
-		END AS eligible_flag,
-		
-		case when eligible_flag = 'Eligible' then 1 else 0 end as telematics_eligibile_by_day
+		END AS eligible_flag
 		
 		FROM accounts ta
 			join edw.fact_conversion_accumulating fca on fca.account_id = ta.account_id and fca.policy_development_days = 30
 			LEFT JOIN eligible e ON ta.telematics_user_id = e.telematics_user_id	
+			LEFT JOIN last_trip l on ta.telematics_user_id = l.telematics_user_id
 		WHERE ta.account_classification = 'DAY_ZERO'
 	  	AND fca.policy_bound_timestamp IS NOT NULL
 
 )
 
 	select *
-	from telematics_eligibility;
+	from telematics_eligibility
 );
