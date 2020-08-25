@@ -1,0 +1,58 @@
+drop table if exists michellefukunaga.telematics_trips_score;
+
+create table michellefukunaga.telematics_trips_score as (
+with target_score as (
+  select ts.telematics_user_id,
+  	ts.trip_id,
+  	ts.score,
+  	ts.distracted_driving_score,
+  	ts.brakes_score
+  from app_trip_summaries.trip_scores ts 
+  left JOIN app_telematics.telematics_users u ON u.id = ts.telematics_user_id
+  left JOIN app_telematics.telematics_applications a ON a.id = u.telematics_application_id
+  WHERE a.name ='root-app'
+   AND score is NOT NULL
+
+),
+
+score as (
+	SELECT
+		te.account_id,
+		te.telematics_user_id,
+		te.eligible_flag,
+		te.test_drive_start_date,
+		te.test_drive_end_date,
+		te.relevant_eligible_date,
+		te.trip_development_days,
+	    ts.score,
+	    ts.trip_id,
+	    date_trunc('day', s.created_at) as trip_date,
+	    s.created_at as trip_timestamp_raw,
+	    date_trunc('minute', trip_timestamp_raw) + interval '10 minute' as trip_timestamp,
+	    s.daveability_valid,
+		s.highway_distance_meters * 0.00062137 as highway_miles,
+	    nullif(s.duration / 60, 0) as duration_min,
+	    s.end_latitude,
+	    s.end_longitude,
+	    s.platform,
+	    s.start_latitude,
+	    s.start_longitude,
+	    s.phone_motions_count,
+	    s.brakes_count,
+	   	s.distance_meters * 0.00062137 as distance_miles,
+	   	nullif(distance_miles / nullif(s.duration / 3600,0),0) as mph,
+	   	row_number() over (partition by te.telematics_user_id order by trip_timestamp asc) as rn
+  FROM michellefukunaga.telematics_eligibility te
+  join target_score ts on te.telematics_user_id = ts.telematics_user_id
+  join app_trip_summaries.trip_summaries s on ts.trip_id = s.trip_id
+  WHERE s.daveability_valid = TRUE
+   and distance_miles between 1 and 200
+   and mph between 10 and 100
+   and te.test_drive_start_date >= '2020-01-01'
+   and trip_timestamp_raw >= test_drive_start_date
+   and trip_timestamp_raw <= test_drive_end_date
+)
+
+select *
+from score
+);
