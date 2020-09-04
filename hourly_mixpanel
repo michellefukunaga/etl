@@ -41,7 +41,7 @@ with hourly_mixpanel as (
 		sum(case when event_name in ('HOME_CLASSIC_MENU_HELP_AND_SUPPORT_PRESSED','DAY_ZERO_MENU_HELP_AND_SUPPORT_PRESSED','POLICYHOLDER_MENU_HELP_AND_SUPPORT_PRESSED','PREBIND_HOME_HOME_CLASSIC_MENU_HELP_AND_SUPPORT_PRESSED') then 1 else 0 end) as help_menu
 		
 	from mixpanel_mart.events m
-		left join root.michellefukunaga.daily_tele t on t.user_id = m.user_id and date_trunc('day', m.event_timestamp) = t.trip_date
+		right join root.michellefukunaga.daily_tele t on t.user_id = m.user_id and date_trunc('day', m.event_timestamp) = t.trip_date
 
 	group by 1,2,3,4,5,6
 	
