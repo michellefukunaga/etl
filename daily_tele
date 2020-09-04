@@ -12,6 +12,7 @@ with daily_tele as (
 			ROW_NUMBER() OVER (PARTITION BY d.telematics_user_id ORDER BY trip_date ASC) AS test_drive_development_day
 	from telematics_mart.telematics_user_days d
 	join michellefukunaga.telematics_eligibility t on d.telematics_user_id = t.telematics_user_id and date_trunc('day', d.trip_date) >= t.test_drive_start_date and date_trunc('day', d.trip_date) <= t.test_drive_end_date
+	where t.profile_created_timestamp >= '2020-01-01'
 
 )
 	select d.*,
