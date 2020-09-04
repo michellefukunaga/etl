@@ -95,18 +95,18 @@ create table root.michellefukunaga.telematics_eligibility as (
 		SELECT distinct ta.account_id,
 		ta.telematics_user_id,
 		ta.user_id,
---		ta.os,
 		fca.first_trip_recorded_timestamp,
 		l.last_trip_timestamp,
+		fca.underwriting_decision_timestamp,
 		case when datediff(d, fca.first_trip_recorded_timestamp, fca.profile_created_timestamp) >= 50 then fca.profile_created_timestamp
 			else coalesce(fca.first_trip_recorded_timestamp, fca.profile_created_timestamp)
 		end as test_drive_start_date,
-		case when e.ubi_eligible_date < fca.underwriting_decision_timestamp then e.ubi_eligible_date 
-			else coalesce(fca.underwriting_decision_timestamp, dateadd('day', 45, test_drive_start_date))
+		case when e.ubi_eligible_date < fca.profile_created_timestamp then coalesce(fca.underwriting_decision_timestamp, dateadd('day', 45, test_drive_start_date))
+			else coalesce(e.ubi_eligible_date, dateadd('day', 45, test_drive_start_date))
 		end as test_drive_end_date,
 		case when datediff('day', sysdate, test_drive_end_date) > 0 then datediff('day', test_drive_start_date, sysdate) 
 			else datediff('day', test_drive_start_date, test_drive_end_date) 
-		end as trip_development_days,
+		end as test_drive_development_days,
 		fca.policy_bound_timestamp,
 		fca.final_bind_timestamp,
 		fca.profile_created_timestamp,
@@ -133,12 +133,12 @@ create table root.michellefukunaga.telematics_eligibility as (
 		distinct ta.account_id,
 		ta.telematics_user_id,
 		ta.user_id,
---		ta.os,
 		fca.first_trip_recorded_timestamp,
 		l.last_trip_timestamp,
+		fca.day_zero_underwriting_decision_timestamp as underwriting_decision_timestamp, 
 		fca.policy_bound_timestamp as test_drive_start_date,
 		coalesce(fca.day_zero_underwriting_decision_timestamp, dateadd(day, 30, test_drive_start_date)) as test_drive_end_date,
-		fca.policy_development_days as trip_development_days,
+		datediff(d, test_drive_start_date, test_drive_end_date) as test_drive_development_days,
 		fca.policy_bound_timestamp,
 		fca.final_bind_timestamp,
 		fca.profile_created_timestamp,
