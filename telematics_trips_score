@@ -26,7 +26,7 @@ score as (
 		te.test_drive_development_days,
 	    ts.score,
 	    ts.trip_id,
-	    date_trunc('day', s.created_at) as trip_date,
+	    date_trunc('day', s.start_timestamp) as trip_date,
 	    s.start_timestamp as trip_timestamp_raw,
 	    s.end_timestamp as trip_end_timestamp_raw,
 	    date_trunc('minute', trip_timestamp_raw) + interval '10 minute' as trip_timestamp,
@@ -49,9 +49,9 @@ score as (
   WHERE s.daveability_valid = TRUE
    and distance_miles between 1 and 200
    and mph between 10 and 100
-   and te.test_drive_start_date >= '2020-01-01'
-   and trip_timestamp_raw >= test_drive_start_date
-   and trip_timestamp_raw <= test_drive_end_date
+   and trip_date >= '2020-01-01'
+   and trip_date >= test_drive_start_date
+   and trip_date <= test_drive_end_date
 )
 
 select *
