@@ -112,8 +112,8 @@ create table root.michellefukunaga.telematics_eligibility AS (
 	
 		CASE WHEN e.ubi_eligible_date IS NULL THEN 'Not Eligible'
 			WHEN datediff(d,test_drive_start_date,e.ubi_eligible_date) <= 45 AND ubi_ptnu = 0 THEN 'Eligible'
-			WHEN (ubi_ptnu = 1 OR datediff(d,test_drive_start_date,e.ubi_eligible_date) > 45) AND DATEDIFF(h, l.lASt_trip_timestamp, e.ubi_eligible_date) > 48 THEN 'Forced Push To No Use'
-			WHEN (ubi_ptnu = 1 OR datediff(d,test_drive_start_date, e.ubi_eligible_date) > 45) AND DATEDIFF(h, l.lASt_trip_timestamp, e.ubi_eligible_date) <= 48 THEN 'Push To No Use'
+			WHEN (ubi_ptnu = 1 OR datediff(d,test_drive_start_date,e.ubi_eligible_date) > 45) AND DATEDIFF(h, l.last_trip_timestamp, e.ubi_eligible_date) > 48 THEN 'Forced Push To No Use'
+			WHEN (ubi_ptnu = 1 OR datediff(d,test_drive_start_date, e.ubi_eligible_date) > 45) AND DATEDIFF(h, l.last_trip_timestamp, e.ubi_eligible_date) <= 48 THEN 'Push To No Use'
 		END AS eligible_flag
 		
 		FROM accounts ta
