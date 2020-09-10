@@ -4,6 +4,7 @@ create table root.michellefukunaga.daily_mixpanel as (
 with daily_mixpanel as (
 	select date_trunc('day', event_timestamp) as event_date,
 		m.account_id,
+		t.telematics_user_id,
 		m.user_id,
 		t.test_drive_development_day,
 		t.test_drive_development_week,
