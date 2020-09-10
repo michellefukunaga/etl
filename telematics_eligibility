@@ -1,70 +1,67 @@
 drop table if exists root.michellefukunaga.telematics_eligibility;
-create table root.michellefukunaga.telematics_eligibility as (
+create table root.michellefukunaga.telematics_eligibility AS (
 	
-	With profile as (
-	select *
-	from (
-			select account_id, 
-			id as profile_id,
+	WITH profile AS (
+	SELECT *
+	FROM (
+			SELECT account_id, 
+			id AS profile_id,
   			primary_named_insured_id,
-  			created_at as profile_timestamp,
-  			row_number() over(partition by account_id order by created_at desc) as rn
-  			from app_domain.profiles
+  			created_at AS profile_timestamp,
+  			row_number() over(partition by account_id order by created_at desc) AS rn
+  			FROM app_domain.profiles
 		) 
-	where rn = 1
+	WHERE rn = 1
 
 ),
 
 	pni_driver AS (
 	SELECT account_id,
 	d.profile_id,
-	lower(first_name || '-' || last_name || '-' || dob) as name,
+	lower(first_name || '-' || last_name || '-' || dob) AS name,
 	d.universal_driver_id,
-	id as driver_id
-	from app_domain.drivers d
-		join profile p on d.profile_id = p.profile_id and d.id = p.primary_named_insured_id
+	id AS driver_id
+	FROM app_domain.drivers d
+		JOIN profile p on d.profile_id = p.profile_id and d.id = p.primary_named_insured_id
 ),
 
 	
-	installs as 
+	installs AS 
 	(
-		select distinct user_id,
+		SELECT distinct user_id,
 		install_date
-		from (
-			select distinct user_id,
-			created_at::DATE as install_date,
+		FROM (
+			SELECT distinct user_id,
+			created_at::DATE AS install_date,
 			ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at ASC) AS rn
-		from app_domain.installs
-			where install_date >= '2020-01-01'
+		FROM app_domain.installs
+			WHERE install_date >= '2020-01-01'
 		)
-		where rn = 1
+		WHERE rn = 1
 	),
 
- 	accounts as (
-	select u.account_id,
+ 	accounts AS (
+	SELECT u.account_id,
 		da.account_classification,
 		u.telematics_user_id,
 		i.user_id,
 		i.install_date
-	from installs i
-		join app_domain.users u on i.user_id = u.id
-		join edw.dim_account da on da.account_id = u.account_id and da.is_suspicious = 'FALSE' and da.in_market = 'TRUE' and da.is_current = 'true'
-			and u.id not in (select distinct testable_id from app_domain.ab_tests where trim(name) = 'empty_test_drive')
-			and u.account_id not in (select distinct testable_id from app_domain.ab_tests where trim(name) = 'one_product_v1')
-		join pni_driver d on da.account_id = d.account_id and u.universal_driver_id = d.universal_driver_id
-	where not da.state = 'CA'
+	FROM installs i
+		JOIN app_domain.users u on i.user_id = u.id
+		JOIN edw.dim_account da on da.account_id = u.account_id and da.is_suspicious = 'FALSE' and da.in_market = 'TRUE' and da.is_current = 'true'
+			and u.id not in (SELECT distinct testable_id FROM app_domain.ab_tests WHERE trim(name) = 'empty_test_drive')
+			and u.account_id not in (SELECT distinct testable_id FROM app_domain.ab_tests WHERE trim(name) = 'one_product_v1')
+		JOIN pni_driver d on da.account_id = d.account_id and u.universal_driver_id = d.universal_driver_id
+	WHERE not da.state = 'CA'
 	and not da.account_classification = 'SKIP_DRIVE'
---	and i.os in ('iOS', 'Android') 
---	and not i.app_version is null
-
 
 ),
 
 	eligible AS(
 		SELECT
 			telematics_user_id,
-			eligible_at as ubi_eligible_date,
-			push_to_no_use as ubi_ptnu
+			eligible_at AS ubi_eligible_date,
+			push_to_no_use AS ubi_ptnu
 		FROM (SELECT
 			ubi.telematics_user_id,
 				ubi.created_at AS eligible_at,
@@ -78,14 +75,14 @@ create table root.michellefukunaga.telematics_eligibility as (
 		WHERE rank = 1
 	),
 	
-	last_trip as (
-		select telematics_user_id,
-			max(trip_timestamp) as last_trip_timestamp
-		from (
-			select t.telematics_user_id,
-				t.created_at as trip_timestamp
-			from app_telematics.trips t
-				join eligible e on t.telematics_user_id = e.telematics_user_id and t.created_at <= e.ubi_eligible_date
+	last_trip AS (
+		SELECT telematics_user_id,
+			max(trip_timestamp) AS last_trip_timestamp
+		FROM (
+			SELECT t.telematics_user_id,
+				t.created_at AS trip_timestamp
+			FROM app_telematics.trips t
+				JOIN eligible e on t.telematics_user_id = e.telematics_user_id and t.created_at <= e.ubi_eligible_date
 		)
 		group by 1
 	),
@@ -98,15 +95,15 @@ create table root.michellefukunaga.telematics_eligibility as (
 		fca.first_trip_recorded_timestamp,
 		l.last_trip_timestamp,
 		fca.underwriting_decision_timestamp,
-		case when datediff(d, fca.first_trip_recorded_timestamp, fca.profile_created_timestamp) >= 50 then fca.profile_created_timestamp
+		CASE when datediff(d, fca.first_trip_recorded_timestamp, fca.profile_created_timestamp) >= 50 then fca.profile_created_timestamp
 			else coalesce(fca.first_trip_recorded_timestamp, fca.profile_created_timestamp)
-		end as test_drive_start_date,
-		case when e.ubi_eligible_date < fca.profile_created_timestamp then coalesce(fca.underwriting_decision_timestamp, dateadd('day', 45, test_drive_start_date))
+		end AS test_drive_start_date,
+		CASE when e.ubi_eligible_date < fca.profile_created_timestamp then coalesce(fca.underwriting_decision_timestamp, dateadd('day', 45, test_drive_start_date))
 			else coalesce(e.ubi_eligible_date, dateadd('day', 45, test_drive_start_date))
-		end as test_drive_end_date,
-		case when datediff('day', sysdate, test_drive_end_date) > 0 then datediff('day', test_drive_start_date, sysdate) 
+		end AS test_drive_end_date,
+		CASE when datediff('day', sysdate, test_drive_end_date) > 0 then datediff('day', test_drive_start_date, sysdate) 
 			else datediff('day', test_drive_start_date, test_drive_end_date) 
-		end as test_drive_development_days,
+		end AS test_drive_development_days,
 		fca.policy_bound_timestamp,
 		fca.final_bind_timestamp,
 		fca.profile_created_timestamp,
@@ -115,12 +112,12 @@ create table root.michellefukunaga.telematics_eligibility as (
 	
 		CASE WHEN e.ubi_eligible_date IS NULL THEN 'Not Eligible'
 			WHEN datediff(d,test_drive_start_date,e.ubi_eligible_date) <= 45 AND ubi_ptnu = 0 THEN 'Eligible'
-			WHEN (ubi_ptnu = 1 OR datediff(d,test_drive_start_date,e.ubi_eligible_date) > 45) AND DATEDIFF(h, l.last_trip_timestamp, e.ubi_eligible_date) > 48 THEN 'Forced Push To No Use'
-			WHEN (ubi_ptnu = 1 OR datediff(d,test_drive_start_date, e.ubi_eligible_date) > 45) AND DATEDIFF(h, l.last_trip_timestamp, e.ubi_eligible_date) <= 48 THEN 'Push To No Use'
+			WHEN (ubi_ptnu = 1 OR datediff(d,test_drive_start_date,e.ubi_eligible_date) > 45) AND DATEDIFF(h, l.lASt_trip_timestamp, e.ubi_eligible_date) > 48 THEN 'Forced Push To No Use'
+			WHEN (ubi_ptnu = 1 OR datediff(d,test_drive_start_date, e.ubi_eligible_date) > 45) AND DATEDIFF(h, l.lASt_trip_timestamp, e.ubi_eligible_date) <= 48 THEN 'Push To No Use'
 		END AS eligible_flag
 		
 		FROM accounts ta
-			join edw.fact_conversion_accumulating fca on fca.account_id = ta.account_id and fca.is_current = TRUE
+			JOIN edw.fact_conversion_accumulating fca on fca.account_id = ta.account_id and fca.is_current = TRUE
 			LEFT JOIN eligible e ON ta.telematics_user_id = e.telematics_user_id
 			LEFT JOIN last_trip l on ta.telematics_user_id = l.telematics_user_id
 
@@ -135,10 +132,10 @@ create table root.michellefukunaga.telematics_eligibility as (
 		ta.user_id,
 		fca.first_trip_recorded_timestamp,
 		l.last_trip_timestamp,
-		fca.day_zero_underwriting_decision_timestamp as underwriting_decision_timestamp, 
-		fca.policy_bound_timestamp as test_drive_start_date,
-		coalesce(fca.day_zero_underwriting_decision_timestamp, dateadd(day, 30, test_drive_start_date)) as test_drive_end_date,
-		datediff(d, test_drive_start_date, test_drive_end_date) as test_drive_development_days,
+		fca.day_zero_underwriting_decision_timestamp AS underwriting_decision_timestamp, 
+		fca.policy_bound_timestamp AS test_drive_start_date,
+		coalesce(fca.day_zero_underwriting_decision_timestamp, dateadd(day, 30, test_drive_start_date)) AS test_drive_end_date,
+		datediff(d, test_drive_start_date, test_drive_end_date) AS test_drive_development_days,
 		fca.policy_bound_timestamp,
 		fca.final_bind_timestamp,
 		fca.profile_created_timestamp,
@@ -152,7 +149,7 @@ create table root.michellefukunaga.telematics_eligibility as (
 		END AS eligible_flag
 		
 		FROM accounts ta
-			join edw.fact_conversion_accumulating fca on fca.account_id = ta.account_id and fca.is_current = TRUE
+			JOIN edw.fact_conversion_accumulating fca on fca.account_id = ta.account_id and fca.is_current = TRUE
 			LEFT JOIN eligible e ON ta.telematics_user_id = e.telematics_user_id	
 			LEFT JOIN last_trip l on ta.telematics_user_id = l.telematics_user_id
 		WHERE ta.account_classification = 'DAY_ZERO'
@@ -160,6 +157,6 @@ create table root.michellefukunaga.telematics_eligibility as (
 
 )
 
-	select *
-	from telematics_eligibility
+	SELECT *
+	FROM telematics_eligibility
 );
