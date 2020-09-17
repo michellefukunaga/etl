@@ -1,0 +1,191 @@
+create table root.michellefukunaga.advertise_test as (
+
+with profile AS (
+	SELECT *
+	FROM (
+			SELECT account_id, 
+			id AS profile_id,
+  			primary_named_insured_id,
+  			created_at AS profile_timestamp,
+  			row_number() over(partition by account_id order by created_at desc) AS rn
+  			FROM app_domain.profiles
+		) 
+	WHERE rn = 1
+
+),
+
+	pni_driver AS (
+	SELECT account_id,
+	d.profile_id,
+	lower(first_name || '-' || last_name || '-' || dob) AS name,
+	d.universal_driver_id,
+	id AS driver_id
+	FROM app_domain.drivers d
+		JOIN profile p on d.profile_id = p.profile_id and d.id = p.primary_named_insured_id
+),
+
+
+--testing population
+	target as (
+	  SELECT
+	   da.account_id,
+	   u.id as user_id,
+	   telematics_user_id,
+	   bucket,
+	   signup_platform,
+	   account_classification,
+	   fca.profile_created_timestamp
+	FROM server_public.ab_tests ab
+	  JOIN edw.dim_account da ON da.account_id = ab.testable_id AND da.is_current
+	  JOIN edw.fact_conversion_accumulating fca ON fca.account_id = da.account_id AND fca.is_current
+	  JOIN app_domain.users u on u.account_id = da.account_id
+	  JOIN pni_driver d on da.account_id = d.account_id and u.universal_driver_id = d.universal_driver_id
+	WHERE ab.name = 'advertise_test_drive_in_profile'
+	    AND attributed_in_market = 'true'
+	    AND is_suspicious = 'false'
+	    and not da.state = 'CA'
+		  and not da.account_classification = 'SKIP_DRIVE'
+),
+
+	--daily telematics
+	daily_tele AS (
+
+	with temp as (
+	SELECT 
+		d.telematics_user_id,
+		t.user_id,
+		t.account_id,
+		trip_date,			
+		number_of_trips,
+		distance_per_day,
+		CASE WHEN had_location_change = 'TRUE' THEN 1 ELSE 0 END AS had_location_change,
+		CASE WHEN had_trip = 'TRUE' THEN 1 ELSE 0 END AS had_trip,
+		CASE WHEN app_installed = 'installed' THEN 1 ELSE 0 END AS app_installed,
+		ROW_NUMBER() OVER (PARTITION BY d.telematics_user_id ORDER BY trip_date ASC) AS test_drive_development_day
+	FROM telematics_mart.telematics_user_days d
+	JOIN target t ON d.telematics_user_id = t.telematics_user_id AND date_trunc('day', d.trip_date) >= date_trunc('day', t.profile_created_timestamp)
+	
+	)
+	SELECT 		
+		telematics_user_id,
+		user_id,
+		account_id,
+		trip_date,			
+		number_of_trips,
+		distance_per_day,
+		had_location_change,
+		had_trip,
+		app_installed,
+		test_drive_development_day,
+		ceiling(test_drive_development_day::FLOAT/7) AS test_drive_development_week,
+		
+		--app open recency--
+		LAG(trip_date,1) OVER (PARTITION BY account_id, user_id, telematics_user_id ORDER BY trip_date) AS prev_trip_date,
+		DATEDIFF('day', prev_trip_date, trip_date) AS days_since_last_trip,
+		
+		--app open magnitude change--
+		LAG(distance_per_day,1) OVER (PARTITION BY account_id, user_id, telematics_user_id ORDER BY trip_date) AS prev_distance,
+		distance_per_day - COALESCE(prev_distance,0) AS daily_distance_chng,
+		daily_distance_chng::FLOAT/NULLIF(prev_distance,0) AS daily_distance_percent_chng
+		
+	FROM temp d
+	ORDER BY account_id, user_id, telematics_user_id, trip_date 
+
+),
+
+--select * from daily_tele;
+
+--daily mixpanel
+	daily_mixpanel AS (
+	
+	with temp as (
+		SELECT 
+		date_trunc('day', event_timestamp) AS event_date,
+		t.account_id,
+		t.telematics_user_id,
+		t.user_id,
+		t.test_drive_development_day,
+		t.test_drive_development_week,
+			
+		--category--
+		SUM(CASE WHEN (event_name ILIKE '%SCORE_CARD%' OR event_name ILIKE '%DRIVING_SCORE%') THEN 1 ELSE 0 END) AS score_card_category,
+		SUM(CASE WHEN event_name ILIKE '%ACHIEVEMENTS%' THEN 1 ELSE 0 END) AS achievements_category,
+		
+		--app open--
+		sum(CASE WHEN (event_name ILIKE '%pressed%' OR event_name ILIKE '%opened%' OR event_name ILIKE '%view%' OR event_name ILIKE '%screen' OR event_name ILIKE '%tap' OR event_name ILIKE '%seen') THEN 1 ELSE 0 END) AS app_open
+				
+	FROM mixpanel_mart.events m
+	JOIN daily_tele t ON t.user_id = m.user_id AND date_trunc('day', m.event_timestamp) = t.trip_date
+
+	GROUP BY 1,2,3,4,5,6
+	ORDER BY t.account_id, t.user_id, t.telematics_user_id, event_date 
+	)
+	
+	SELECT *,
+		--app open recency--
+		LAG(event_date,1) over (partition by account_id, user_id, telematics_user_id order by event_date) as prev_app_open_date,
+		datediff('day', prev_app_open_date, event_date) as days_since_last_app_open,
+		
+		--app open magnitude change--
+		LAG(app_open,1) over (partition by account_id, user_id, telematics_user_id order by event_date) as prev_app_open_clicks,
+		app_open - COALESCE(prev_app_open_clicks,0) as daily_clicks_chng,
+		daily_clicks_chng::float/NULLIF(prev_app_open_clicks,0) as daily_clicks_percent_chng
+		
+	FROM temp
+	WHERE app_open > 0
+	ORDER BY account_id, user_id, telematics_user_id, event_date 
+)
+
+--select * from daily_mixpanel
+--where telematics_user_id = '908f5403-da62-4a50-a307-b7f46af56488';
+
+	select 
+		distinct t.user_id,
+		t.telematics_user_id,
+		t.account_id,
+		t.signup_platform,
+		fca.profile_created_timestamp,
+		fca.install_created_timestamp,
+		abs(date_diff('month', fca.profile_created_timestamp, fca.install_created_timestamp)) as month_install_profile,
+		abs(date_diff('month', fca.profile_created_timestamp, fca.first_trip_recorded_timestamp)) as month_trip_profile,
+		fca.first_trip_recorded_timestamp,
+		case when month_trip_profile <= 3 then 1 else 0 end as has_trip,
+		case when (month_install_profile <= 3 or has_trip = 1) then 1 else 0 end as has_install,
+		case when has_trip = 1 and abs(date_diff('day', fca.profile_created_timestamp, fca.first_trip_recorded_timestamp)) <= 7 then 1 else 0 end as profile_trip_7day,
+		case when has_install = 1 and abs(date_diff('day', fca.profile_created_timestamp, fca.install_created_timestamp)) <= 7 then 1 else 0 end as profile_install_7day,
+		
+		fca.underwriting_approved_by_day as has_uw1,
+		fca.day_zero_underwriting_approved_by_day as has_uw2,
+		fca.policies_bound_by_day as has_bind1,
+		fca.final_binds_by_day as has_bind2,
+--    	dr.underwriting_tier_factor,
+		t.account_classification,
+		t.bucket,
+
+		tele.eligible_flag,
+		tele.relevant_eligible_date,
+		tele.test_drive_development_days,
+		
+		max(te.test_drive_development_day) as max_test_drive_development_day,
+	
+		count(distinct event_date) as active_days,
+		active_days/max_test_drive_development_day::float as active_days_so_far_p,
+		active_days::float/NULLIF(test_drive_development_days,0) as active_days_p,
+		avg(days_since_last_app_open) as avg_days_since_last_app_open,
+		avg(daily_clicks_percent_chng) as avg_daily_clicks_percent_chng,
+	
+		sum(had_trip) as active_drive_days,
+		active_drive_days::float/NULLIF(test_drive_development_days,0) as active_drive_days_p,
+		active_drive_days::float/max_test_drive_development_day as active_drive_days_so_far_p,
+		avg(daily_distance_percent_chng) as avg_daily_distance_percent_chng
+		
+	from target t
+	 	left join root.michellefukunaga.telematics_eligibility tele on t.telematics_user_id = tele.telematics_user_id
+		join edw.fact_conversion_accumulating fca on fca.account_id = t.account_id and fca.is_current = TRUE
+		join daily_tele te on te.telematics_user_id = t.telematics_user_id 
+		left join daily_mixpanel m on m.telematics_user_id = t.telematics_user_id and te.trip_date = m.event_date
+--		left join edw.dim_rate dr ON fca.underwriting_decision_low_quote_k = dr.quote_k AND dr.actual_rate_indicator = 1 
+	where has_install = 1
+		and fca.profile_development_days >= 7
+	group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22
+);
