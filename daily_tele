@@ -1,24 +1,44 @@
 drop table if exists root.michellefukunaga.daily_tele;
-create table root.michellefukunaga.daily_tele as (
-with daily_tele as (
-	select d.telematics_user_id,
-			t.user_id,
-			t.account_id,
-			trip_date,
-			number_of_trips,
-			distance_per_day,
-			case when had_location_change = 'TRUE' then 1 else 0 end as had_location_change,
-			case when had_trip = 'TRUE' then 1 else 0 end as had_trip,
-			case when app_installed = 'installed' then 1 else 0 end as app_installed,
-			ROW_NUMBER() OVER (PARTITION BY d.telematics_user_id ORDER BY trip_date ASC) AS test_drive_development_day
-	from telematics_mart.telematics_user_days d
-		join michellefukunaga.telematics_eligibility t on d.telematics_user_id = t.telematics_user_id and date_trunc('day', d.trip_date) >= t.test_drive_start_date and date_trunc('day', d.trip_date) <= t.test_drive_end_date
-	where t.profile_created_timestamp >= '2020-01-01'
+CREATE TABLE root.michellefukunaga.daily_tele AS (
+WITH daily_tele AS (
+	SELECT 
+		d.telematics_user_id,
+		t.user_id,
+		t.account_id,
+		trip_date,			
+		number_of_trips,
+		distance_per_day,
+		CASE WHEN had_location_change = 'TRUE' THEN 1 ELSE 0 END AS had_location_change,
+		CASE WHEN had_trip = 'TRUE' THEN 1 ELSE 0 END AS had_trip,
+		CASE WHEN app_installed = 'installed' THEN 1 ELSE 0 END AS app_installed,
+		ROW_NUMBER() OVER (PARTITION BY d.telematics_user_id ORDER BY trip_date ASC) AS test_drive_development_day
+	FROM telematics_mart.telematics_user_days d
+		JOIN michellefukunaga.telematics_eligibility t ON d.telematics_user_id = t.telematics_user_id AND date_trunc('day', d.trip_date) >= t.test_drive_start_date AND date_trunc('day', d.trip_date) <= t.test_drive_end_date
 
 )
-	select d.*,
-		ceiling(test_drive_development_day::float/7) as test_drive_development_week
-	from daily_tele d
-
+	SELECT 		
+		telematics_user_id,
+		user_id,
+		account_id,
+		trip_date,			
+		number_of_trips,
+		distance_per_day,
+		had_location_change,
+		had_trip,
+		app_installed,
+		test_drive_development_day,
+		ceiling(test_drive_development_day::FLOAT/7) AS test_drive_development_week,
+		
+		--app open recency--
+		LAG(trip_date,1) OVER (PARTITION BY account_id, user_id, telematics_user_id ORDER BY trip_date) AS prev_trip_date,
+		DATEDIFF('day', prev_trip_date, trip_date) AS days_since_last_trip,
+		
+		--app open magnitude change--
+		LAG(distance_per_day,1) OVER (PARTITION BY account_id, user_id, telematics_user_id ORDER BY trip_date) AS prev_distance,
+		distance_per_day - COALESCE(prev_distance,0) AS daily_distance_chng,
+		daily_distance_chng::FLOAT/NULLIF(prev_distance,0) AS daily_distance_percent_chng
+		
+	FROM daily_tele d
+	ORDER BY account_id, user_id, telematics_user_id, trip_date 
 
 );
