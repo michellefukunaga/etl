@@ -29,11 +29,11 @@ WITH daily_tele AS (
 		test_drive_development_day,
 		ceiling(test_drive_development_day::FLOAT/7) AS test_drive_development_week,
 		
-		--app open recency--
+		--trip recency--
 		LAG(trip_date,1) OVER (PARTITION BY account_id, user_id, telematics_user_id ORDER BY trip_date) AS prev_trip_date,
 		DATEDIFF('day', prev_trip_date, trip_date) AS days_since_last_trip,
 		
-		--app open magnitude change--
+		--trip distance change--
 		LAG(distance_per_day,1) OVER (PARTITION BY account_id, user_id, telematics_user_id ORDER BY trip_date) AS prev_distance,
 		distance_per_day - COALESCE(prev_distance,0) AS daily_distance_chng,
 		daily_distance_chng::FLOAT/NULLIF(prev_distance,0) AS daily_distance_percent_chng
