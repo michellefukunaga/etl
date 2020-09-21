@@ -151,8 +151,8 @@ with profile AS (
 		fca.first_trip_recorded_timestamp,
 		case when month_trip_profile <= 3 then 1 else 0 end as has_trip,
 		case when (month_install_profile <= 3 or has_trip = 1) then 1 else 0 end as has_install,
-		case when has_trip = 1 and abs(date_diff('day', fca.profile_created_timestamp, fca.first_trip_recorded_timestamp)) <= 7 then 1 else 0 end as profile_trip_7day,
-		case when has_install = 1 and abs(date_diff('day', fca.profile_created_timestamp, fca.install_created_timestamp)) <= 7 then 1 else 0 end as profile_install_7day,
+		case when abs(date_diff('day', fca.profile_created_timestamp, fca.first_trip_recorded_timestamp)) <= 7 then 1 else 0 end as profile_trip_7day,
+		case when abs(date_diff('day', fca.profile_created_timestamp, fca.install_created_timestamp)) <= 7 then 1 else 0 end as profile_install_7day,
 		
 		fca.underwriting_approved_by_day as has_uw1,
 		fca.day_zero_underwriting_approved_by_day as has_uw2,
