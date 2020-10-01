@@ -1,0 +1,46 @@
+drop table if exists root.michellefukunaga.mixpanel_postbind_initial;
+create table root.michellefukunaga.mixpanel_postbind_initial as
+(	
+	select *
+	from (
+	select distinct user_id,
+		m.account_id,
+		da.account_classification,
+		event_name,
+		event_timestamp,
+		os,
+		row_number() over(partition by user_id, m.account_id order by event_timestamp asc) as step
+	FROM mixpanel_mart.events m
+		join edw.fact_conversion_accumulating fca on m.account_id = fca.account_id and fca.policy_development_days = 1
+		join edw.dim_account da on fca.account_id = da.account_id 
+	where fca.profile_created_timestamp >= '2020-01-01'
+	  and fca.as_of_date = date_trunc('day', event_timestamp)
+	  and da.account_classification = 'CLASSIC'
+	  and fca.final_binds_by_day = 1
+	  and os in ('iPhone OS', 'Android')
+	)
+	where step <= 10
+	
+	union
+	
+	select *
+	from (
+	select distinct user_id,
+		m.account_id,
+		da.account_classification,
+		event_name,
+		event_timestamp,
+		os,
+		row_number() over(partition by user_id, m.account_id order by event_timestamp asc) as step
+	FROM mixpanel_mart.events m
+		join edw.fact_conversion_accumulating fca on m.account_id = fca.account_id and fca.policy_development_days = 31
+		join edw.dim_account da on fca.account_id = da.account_id 
+	where fca.profile_created_timestamp >= '2020-01-01'
+	  and fca.as_of_date = date_trunc('day', event_timestamp)
+	  and da.account_classification = 'DAY_ZERO'
+	  and fca.final_binds_by_day = 1
+	  and os in ('iPhone OS', 'Android')
+	  and not event_name = '$identify'
+	)
+	where step <= 10
+);
