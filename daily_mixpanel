@@ -1,67 +1,48 @@
-drop table if exists root.michellefukunaga.daily_mixpanel;
-CREATE TABLE root.michellefukunaga.daily_mixpanel AS (
-WITH daily_mixpanel AS (
-	SELECT 
-		date_trunc('day', event_timestamp) AS event_date,
+WITH daily_mixpanel_test_drive AS (
+  SELECT
+    date_trunc('day', event_timestamp) AS event_date,
 		te.account_id,
 		te.telematics_user_id,
 		te.user_id,
 		t.test_drive_development_day,
 		t.test_drive_development_week,
-			
-		--category--
-		SUM(CASE WHEN (event_name ILIKE '%SCORE_CARD%' OR event_name ILIKE '%DRIVING_SCORE%') THEN 1 ELSE 0 END) AS score_card_category,
-		SUM(CASE WHEN event_name ILIKE '%ACHIEVEMENTS%' THEN 1 ELSE 0 END) AS achievements_category,
+	  SUM(CASE WHEN (event_name ILIKE '%SCORE_CARD%' OR event_name ILIKE '%DRIVING_SCORE%') THEN 1 ELSE 0 END) AS score_card_category,
+	  SUM(CASE WHEN event_name ILIKE '%ACHIEVEMENTS%' THEN 1 ELSE 0 END) AS achievements_category,
 		SUM(CASE WHEN (event_name ILIKE '%POLICY_CARD%' OR event_name ILIKE '%POLICYHOLDER%') THEN 1 ELSE 0 END) AS policy_category,
-		
-		--app open--
-		sum(CASE WHEN (event_name ILIKE '%pressed%' OR event_name ILIKE '%opened%' OR event_name ILIKE '%view%' OR event_name ILIKE '%screen' OR event_name ILIKE '%tap' OR event_name ILIKE '%seen') THEN 1 ELSE 0 END) AS app_open,
-					
-		--score card--
-		sum(CASE WHEN event_name IN ('DRIVER_SCORE_CARD_SEEN', 'DAY_ZERO_SCORE_CARD_SCREEN','DRIVER_SCORE_CARD_SCREEN','score_card','DAY_ZERO_SCORE_CARD_LEARN_MORE','DRIVER_SCORE_CARD_LEARN_MORE','HOME_POLICYHOLDER_HAMBURGER_MENU_DRIVING_SCORE_PRESSED','HOME_CLASSIC_HAMBURGER_MENU_DRIVING_SCORE_PRESSED','DAY_ZERO_CHECK_DRIVING_SCORE_CARD_VIEW_SCORECARD_PRESSED','VIEW_DRIVING_SCORE_PRESSED','HOME_DAY_ZERO_HAMBURGER_MENU_DRIVING_SCORE_PRESSED') then 1 else 0 end) as score_card,
-		
-		sum(CASE WHEN event_name IN ('DRIVING_PROGRESS_SCREEN','DAY_ZERO_DAYS_TO_GO') THEN 1 ELSE 0 END) AS driving_progress,
-		
-		--driver menu
-		sum(CASE WHEN event_name IN ('HOME_DAY_ZERO_HAMBURGER_MENU_DRIVERS_PRESSED','HOME_CLASSIC_HAMBURGER_MENU_DRIVERS_PRESSED') THEN 1 ELSE 0 END) AS driver_menu_click,
-		--referral menu
-		sum(CASE WHEN event_name IN ('HOME_DAY_ZERO_HAMBURGER_MENU_REFER_PRESSED', 'HOME_POLICYHOLDER_HAMBURGER_MENU_REFER_PRESSED','HOME_CLASSIC_HAMBURGER_MENU_REFER_PRESSED','DAY_ZERO_REFERRAL_CARD_OPENED','referral') THEN 1 ELSE 0 END) AS referral_menu_click,
-		--policy menu
-		sum(CASE WHEN event_name IN ('HOME_DAY_ZERO_HAMBURGER_MENU_AUTO_POLICY_PRESSED', 'HOME_POLICYHOLDER_HAMBURGER_MENU_AUTO_POLICY_PRESSED','POLICY_CARD_OPENED') THEN 1 ELSE 0 END) AS policy_menu_click,
-		--account menu
-		sum(CASE WHEN event_name IN ('HOME_DAY_ZERO_HAMBURGER_MENU_ACCOUNT_PRESSED', 'HOME_POLICYHOLDER_HAMBURGER_MENU_ACCOUNT_PRESSED','DAY_ZERO_ACCOUNT_DETAILS_CARD_OPENED') THEN 1 ELSE 0 END) AS account_menu,
-		--profile menu 
-		sum(CASE WHEN event_name IN ('HOME_CLASSIC_HAMBURGER_MENU_PROFILE_PRESSED','profile') THEN 1 ELSE 0 END) AS profile_menu,
-		--payment menu
-		sum(CASE WHEN event_name IN ('HOME_DAY_ZERO_HAMBURGER_MENU_PAYMENTS_PRESSED','HOME_POLICYHOLDER_HAMBURGER_MENU_PAYMENTS_PRESSED') THEN 1 ELSE 0 END) AS payment_menu,
-		--claims roadside
-		sum(CASE WHEN event_name IN ('HOME_DAY_ZERO_HAMBURGER_MENU_CLAIMS_AND_ROADSIDE_PRESSED','HOME_POLICYHOLDER_HAMBURGER_MENU_CLAIMS_AND_ROADSIDE_PRESSED','CLAIMS_CARD_OPENED') THEN 1 ELSE 0 END) AS claims_menu,
-		--promo menu
-		sum(CASE WHEN event_name IN ('HOME_CLASSIC_HAMBURGER_MENU_PROMO_PRESSED','HOME_DAY_ZERO_HAMBURGER_MENU_PROMO_PRESSED','promo_redemption') THEN 1 ELSE 0 END) as promo_menu,
-		--achievements-- 
-		sum(CASE WHEN event_name IN ('HOME_DAY_ZERO_HAMBURGER_MENU_ACHIEVEMENTS_PRESSED','HOME_CLASSIC_HAMBURGER_MENU_ACHIEVEMENTS_PRESSED','HOME_POLICYHOLDER_HAMBURGER_MENU_ACHIEVEMENTS_PRESSED','ACHIEVEMENTS_DAY_ZERO_HOME_PRESSED','ACHIEVEMENTS_PREBIND_HOME_PRESSED') THEN 1 ELSE 0 END) AS achievements_menu, 
-		--support
-		sum(CASE WHEN event_name IN ('HOME_CLASSIC_MENU_HELP_AND_SUPPORT_PRESSED','DAY_ZERO_MENU_HELP_AND_SUPPORT_PRESSED','POLICYHOLDER_MENU_HELP_AND_SUPPORT_PRESSED','PREBIND_HOME_HOME_CLASSIC_MENU_HELP_AND_SUPPORT_PRESSED') THEN 1 ELSE 0 END) AS help_menu
-		
-	FROM mixpanel_mart.events m
-		JOIN michellefukunaga.telematics_eligibility te ON m.user_id = te.user_id AND date_trunc('day', m.event_timestamp) >= te.test_drive_start_date AND date_trunc('day', m.event_timestamp) <= te.test_drive_end_date
-		LEFT JOIN root.michellefukunaga.daily_tele t ON t.user_id = m.user_id AND date_trunc('day', m.event_timestamp) = t.trip_date
-
-	GROUP BY 1,2,3,4,5,6
-	ORDER BY te.account_id, te.user_id, te.telematics_user_id, event_date 
-	
+    SUM(CASE WHEN (event_name ILIKE '%pressed%' OR event_name ILIKE '%opened%' OR event_name ILIKE '%view%' OR event_name ILIKE '%screen' OR event_name ILIKE '%tap' OR event_name ILIKE '%seen') THEN 1 ELSE 0 END) AS app_open_clicks,
+    SUM(CASE WHEN (event_name ILIKE '%REFERRAL%') THEN 1 ELSE 0 END) AS referral_category,
+    SUM(CASE WHEN (event_name ILIKE '%PAYMENT%') THEN 1 ELSE 0 END) AS payment_category,
+    SUM(CASE WHEN (event_name ILIKE '%CLAIMS%') THEN 1 ELSE 0 END) AS claims_category,
+    SUM(CASE WHEN (event_name ILIKE '%HELP_AND_SUPPORT%') THEN 1 ELSE 0 END) AS help_category
+  FROM mixpanel_mart.events m
+    JOIN telematics_eligibility te ON m.user_id = te.user_id
+                                                          AND DATE_TRUNC('day', m.event_timestamp) >= te.test_drive_start_date
+                                                          AND DATE_TRUNC('day', m.event_timestamp) <= te.test_drive_end_date
+    LEFT JOIN daily_tele t ON t.user_id = m.user_id
+                                                  AND DATE_TRUNC('day', m.event_timestamp) = t.trip_date
+  GROUP BY 1,2,3,4,5,6
+	ORDER BY te.account_id, te.user_id, te.telematics_user_id, event_date
 )
-	SELECT *,
-		--app open recency--
-		LAG(event_date,1) over (partition by account_id, user_id, telematics_user_id order by event_date) as prev_app_open_date,
-		datediff('day', prev_app_open_date, event_date) as days_since_last_app_open,
-		
-		--app open magnitude change--
-		LAG(app_open,1) over (partition by account_id, user_id, telematics_user_id order by event_date) as prev_app_open_clicks,
-		app_open - COALESCE(prev_app_open_clicks,0) as daily_clicks_chng,
-		daily_clicks_chng::float/NULLIF(prev_app_open_clicks,0) as daily_clicks_percent_chng
-		
-	FROM daily_mixpanel
-	WHERE app_open > 0
-	ORDER BY account_id, user_id, telematics_user_id, event_date 
-);
+  SELECT
+    account_id,
+    telematics_user_id,
+    user_id,
+    event_date,
+    test_drive_development_day,
+    test_drive_development_week,
+    score_card_category,
+    achievements_category,
+    app_open_clicks,
+    referral_category,
+    payment_category,
+    claims_category,
+    help_category,
+    LAG(event_date,1) OVER (PARTITION BY account_id, user_id, telematics_user_id ORDER BY event_date) AS prev_app_open_date,
+		DATEDIFF('day', prev_app_open_date, event_date) AS days_since_last_app_open,
+		LAG(app_open_clicks,1) OVER (PARTITION BY account_id, user_id, telematics_user_id ORDER BY event_date) AS prev_app_open_clicks,
+		app_open_clicks - COALESCE(prev_app_open_clicks,0) AS daily_clicks_chng,
+		daily_clicks_chng::FLOAT/NULLIF(prev_app_open_clicks,0) AS daily_clicks_percent_chng,
+    DATE_TRUNC('hour', CURRENT_DATE) AS as_of_date
+	FROM daily_mixpanel_test_drive
+	WHERE app_open_clicks > 0
+	ORDER BY account_id, user_id, telematics_user_id, event_date
