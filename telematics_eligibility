@@ -1,171 +1,156 @@
-drop table if exists root.michellefukunaga.telematics_eligibility;
-
-CREATE TABLE root.michellefukunaga.telematics_eligibility AS (
-	
-	WITH profile AS (
-	SELECT *
-	FROM (
-			SELECT account_id, 
-			id AS profile_id,
-  			primary_named_insured_id,
-  			created_at AS profile_timestamp,
-  			row_number() over(partition by account_id order by created_at desc) AS rn
-  			FROM app_domain.profiles
-		) 
-	WHERE rn = 1
-
+WITH profile AS (
+    SELECT *
+    FROM (
+      SELECT
+        account_id,
+        id AS profile_id,
+        primary_named_insured_id,
+        created_at AS profile_timestamp,
+        ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY created_at DESC)
+    FROM app_domain.profiles
+  )
+  WHERE row_number = 1
 ),
-
-	pni_driver AS (
-	SELECT account_id,
-	d.profile_id,
-	lower(first_name || '-' || last_name || '-' || dob) AS name,
-	d.universal_driver_id,
-	id AS driver_id
-	FROM app_domain.drivers d
-		JOIN profile p on d.profile_id = p.profile_id and d.id = p.primary_named_insured_id
+pni_driver AS (
+  SELECT
+    account_id,
+    d.profile_id,
+    d.universal_driver_id,
+    id AS driver_id
+  FROM app_domain.drivers d
+    JOIN profile p ON d.profile_id = p.profile_id AND d.id = p.primary_named_insured_id
 ),
-
- 	accounts AS (
-		SELECT 
-			u.account_id,
-			u.telematics_user_id,
-			u.id as user_id,
-			da.account_classification,
-			fca.install_created_timestamp,
-			abs(date_diff('month', fca.profile_created_timestamp, fca.install_created_timestamp)) as month_install_profile,
-			abs(date_diff('month', fca.profile_created_timestamp, fca.first_trip_recorded_timestamp)) as month_trip_profile,
-			CASE WHEN month_trip_profile <= 3 THEN 1 ELSE 0 END AS has_first_trip,
-			CASE WHEN (month_install_profile <= 3 OR has_first_trip = 1) THEN 1 ELSE 0 END AS has_install
-	FROM edw.fact_conversion_accumulating fca
-		JOIN edw.dim_account da ON da.account_id = fca.account_id AND da.is_suspicious = 'FALSE' AND da.in_market = 'TRUE' AND da.is_current = 'true' AND fca.is_current = TRUE
-		JOIN app_domain.users u ON da.account_id = u.account_id 
-		JOIN pni_driver d ON da.account_id = d.account_id AND u.universal_driver_id = d.universal_driver_id
-	WHERE NOT da.state = 'CA'
-		AND NOT da.account_classification = 'SKIP_DRIVE'
-		AND u.id NOT IN (SELECT DISTINCT testable_id FROM app_domain.ab_tests WHERE TRIM(name) = 'empty_test_drive')
---		AND da.account_id not in (SELECT DISTINCT testable_id FROM app_domain.ab_tests WHERE TRIM(name) = 'one_product_v1')
-		AND has_install = 1
-		ANd fca.profile_created_timestamp >= '2020-01-01'
-
+accounts AS (
+  SELECT
+    u.account_id,
+    u.telematics_user_id,
+    u.id AS user_id,
+    da.account_classification,
+    fca.install_created_timestamp,
+    abs(date_diff('month', fca.profile_created_timestamp, fca.install_created_timestamp)) as month_install_profile,
+		abs(date_diff('month', fca.profile_created_timestamp, fca.first_trip_recorded_timestamp)) as month_trip_profile,
+		CASE WHEN month_trip_profile <= 3 THEN 1 ELSE 0 END AS has_first_trip,
+		CASE WHEN (month_install_profile <= 3 OR has_first_trip = 1) THEN 1 ELSE 0 END AS has_install
+  FROM edw.fact_conversion_accumulating fca
+    JOIN edw.dim_account da ON da.account_id = fca.account_id
+                               AND da.is_suspicious = 'FALSE' AND da.in_market = 'TRUE'
+                               AND da.is_current = 'true'
+    JOIN app_domain.users u ON u.account_id = da.account_id
+    JOIN pni_driver d ON da.account_id = d.account_id AND u.universal_driver_id = d.universal_driver_id
+  WHERE fca.is_current = TRUE
+    AND NOT da.state = 'CA'
+    AND NOT da.account_classification = 'SKIP_DRIVE'
+    AND has_install = 1
+    AND fca.profile_created_timestamp >= '2020-01-01'
 ),
+eligible AS(
+  SELECT
+    telematics_user_id,
+    eligible_at AS ubi_eligible_date,
+    push_to_no_use AS ubi_ptnu
+  FROM (
+    SELECT
+      ubi.telematics_user_id,
+      ubi.created_at AS eligible_at,
+      ubi.push_to_no_use,
+      ROW_NUMBER() OVER (PARTITION BY ubi.telematics_user_id ORDER BY ubi.created_at ASC)
+    FROM app_daveability.telematics_scoring_results ubi
+    WHERE eligible = 1
+      AND ubi.scoring_model = 'ubi2'
+      AND created_at::DATE = as_of_date::DATE
+    )
+  WHERE row_number = 1
+),
+last_trip AS (
+  SELECT
+    telematics_user_id,
+    MAX(trip_timestamp) AS last_trip_timestamp
+  FROM (
+    SELECT
+      t.telematics_user_id,
+      t.created_at AS trip_timestamp
+    FROM app_telematics.trips t
+      JOIN eligible e ON t.telematics_user_id = e.telematics_user_id AND t.created_at <= e.ubi_eligible_date
+   )
+  GROUP BY telematics_user_id
+),
+telematics_eligibility AS (
+  SELECT
+    ta.account_id,
+    ta.telematics_user_id,
+    ta.user_id,
+    fca.first_trip_recorded_timestamp,
+    l.last_trip_timestamp,
+    fca.underwriting_decision_timestamp,
+    CASE WHEN DATEDIFF(d, fca.first_trip_recorded_timestamp, fca.profile_created_timestamp) >= 50 THEN fca.profile_created_timestamp
+         ELSE COALESCE(fca.first_trip_recorded_timestamp, fca.profile_created_timestamp)
+         END AS test_drive_start_date,
+    CASE WHEN e.ubi_eligible_date < fca.profile_created_timestamp THEN COALESCE(fca.underwriting_decision_timestamp, dateadd('day', 45, test_drive_start_date))
+         ELSE COALESCE(e.ubi_eligible_date, dateadd('day', 45, test_drive_start_date))
+         END AS test_drive_end_date,
+    CASE WHEN DATEDIFF('day', CURRENT_DATE, test_drive_end_date) > 0 THEN DATEDIFF('day', test_drive_start_date, CURRENT_DATE)
+        ELSE DATEDIFF('day', test_drive_start_date, test_drive_end_date)
+        END AS test_drive_window,
+    fca.policy_bound_timestamp,
+    fca.final_bind_timestamp,
+    fca.profile_created_timestamp,
+    e.ubi_eligible_date relevant_eligible_date,
+    e.ubi_ptnu relevant_ptnu,
+    CASE WHEN e.ubi_eligible_date IS NULL THEN 'Not Eligible'
+         WHEN DATEDIFF(d,test_drive_start_date,e.ubi_eligible_date) <= 45 AND ubi_ptnu = 0 THEN 'Eligible'
+         WHEN (ubi_ptnu = 1 OR DATEDIFF(d,test_drive_start_date,e.ubi_eligible_date) > 45) AND DATEDIFF(h, l.last_trip_timestamp, e.ubi_eligible_date) > 48 THEN 'Forced Push To No Use'
+         WHEN (ubi_ptnu = 1 OR DATEDIFF(d,test_drive_start_date, e.ubi_eligible_date) > 45) AND DATEDIFF(h, l.last_trip_timestamp, e.ubi_eligible_date) <= 48 THEN 'Push To No Use'
+         END AS eligible_flag
+  FROM accounts ta
+      JOIN edw.fact_conversion_accumulating fca ON fca.account_id = ta.account_id AND fca.is_current
+      LEFT JOIN eligible e ON ta.telematics_user_id = e.telematics_user_id
+      LEFT JOIN last_trip l ON ta.telematics_user_id = l.telematics_user_id
+  WHERE ta.account_classification = 'CLASSIC'
 
-	eligible AS(
-		SELECT
-			telematics_user_id,
-			eligible_at AS ubi_eligible_date,
-			push_to_no_use AS ubi_ptnu
-		FROM (SELECT
-			ubi.telematics_user_id,
-				ubi.created_at AS eligible_at,
-				ubi.push_to_no_use,
-				ROW_NUMBER() OVER (PARTITION BY ubi.telematics_user_id ORDER BY ubi.created_at ASC) AS rank
-			FROM app_daveability.telematics_scoring_results ubi
-			WHERE eligible = 1
-				and ubi.scoring_model = 'ubi2'
-				and created_at::DATE = as_of_date::DATE 
-		) 	
-		WHERE rank = 1
-	),
-	
-	last_trip AS (
-		SELECT telematics_user_id,
-			max(trip_timestamp) AS last_trip_timestamp
-		FROM (
-			SELECT t.telematics_user_id,
-				t.created_at AS trip_timestamp
-			FROM app_telematics.trips t
-				LEFT JOIN eligible e on t.telematics_user_id = e.telematics_user_id and t.created_at <= e.ubi_eligible_date
-		)
-		group by 1
-	),
-	
-	telematics_eligibility AS
-	(
-		SELECT distinct ta.account_id,
-		ta.telematics_user_id,
-		ta.user_id,
-		fca.first_trip_recorded_timestamp,
-		l.last_trip_timestamp,
-		fca.underwriting_decision_timestamp,
-		CASE when datediff(d, fca.first_trip_recorded_timestamp, fca.profile_created_timestamp) >= 50 then fca.profile_created_timestamp
-			else coalesce(fca.first_trip_recorded_timestamp, fca.profile_created_timestamp)
-		end AS test_drive_start_date,
-		CASE when e.ubi_eligible_date < fca.profile_created_timestamp then coalesce(fca.underwriting_decision_timestamp, dateadd('day', 45, test_drive_start_date))
-			else coalesce(e.ubi_eligible_date, dateadd('day', 45, test_drive_start_date))
-		end AS test_drive_end_date,
-		CASE when datediff('day', sysdate, test_drive_end_date) > 0 then datediff('day', test_drive_start_date, sysdate) 
-			else datediff('day', test_drive_start_date, test_drive_end_date) 
-		end AS test_drive_window,
-		fca.policy_bound_timestamp,
-		fca.final_bind_timestamp,
-		fca.profile_created_timestamp,
-		e.ubi_eligible_date relevant_eligible_date,
-		e.ubi_ptnu relevant_ptnu,
-	
-		CASE WHEN e.ubi_eligible_date IS NULL THEN 'Not Eligible'
-			WHEN datediff(d,test_drive_start_date,e.ubi_eligible_date) <= 45 AND ubi_ptnu = 0 THEN 'Eligible'
-			WHEN (ubi_ptnu = 1 OR datediff(d,test_drive_start_date,e.ubi_eligible_date) > 45) AND DATEDIFF(h, l.last_trip_timestamp, e.ubi_eligible_date) > 48 THEN 'Forced Push To No Use'
-			WHEN (ubi_ptnu = 1 OR datediff(d,test_drive_start_date, e.ubi_eligible_date) > 45) AND DATEDIFF(h, l.last_trip_timestamp, e.ubi_eligible_date) <= 48 THEN 'Push To No Use'
-		END AS eligible_flag
-		
-		FROM accounts ta
-		JOIN edw.fact_conversion_accumulating fca on fca.account_id = ta.account_id and fca.is_current = TRUE
-			LEFT JOIN eligible e ON ta.telematics_user_id = e.telematics_user_id
-			LEFT JOIN last_trip l on ta.telematics_user_id = l.telematics_user_id
+  UNION ALL
 
-		WHERE ta.account_classification = 'CLASSIC'
-
-		
-		UNION ALL
-
-		SELECT
-		distinct ta.account_id,
-		ta.telematics_user_id,
-		ta.user_id,
-		fca.first_trip_recorded_timestamp,
-		l.last_trip_timestamp,
-		fca.day_zero_underwriting_decision_timestamp AS underwriting_decision_timestamp, 
-		fca.policy_bound_timestamp AS test_drive_start_date,
-		coalesce(fca.day_zero_underwriting_decision_timestamp, dateadd(day, 30, test_drive_start_date)) AS test_drive_end_date,
-		datediff(d, test_drive_start_date, test_drive_end_date) AS test_drive_window,
-		fca.policy_bound_timestamp,
-		fca.final_bind_timestamp,
-		fca.profile_created_timestamp,
-		e.ubi_eligible_date relevant_eligible_date,
-		e.ubi_ptnu relevant_ptnu,
-				
-		CASE WHEN e.ubi_eligible_date IS NULL AND datediff(d,test_drive_start_date, GETDATE()::DATE) < 30 THEN 'Not Eligible'
-	            WHEN e.ubi_eligible_date IS NULL AND datediff(d,test_drive_start_date, GETDATE()::DATE) >= 30 THEN 'Push To No Use'
-				WHEN datediff(d, test_drive_start_date, e.ubi_eligible_date) <= 30 AND ubi_ptnu = 0 THEN 'Eligible'
-				WHEN datediff(d, test_drive_start_date, e.ubi_eligible_date) > 30 OR ubi_ptnu = 1 THEN 'Push To No Use'
-		END AS eligible_flag
-		
-		FROM accounts ta
-		JOIN edw.fact_conversion_accumulating fca on fca.account_id = ta.account_id and fca.is_current = TRUE
-			LEFT JOIN eligible e ON ta.telematics_user_id = e.telematics_user_id	
-			LEFT JOIN last_trip l on ta.telematics_user_id = l.telematics_user_id
-		WHERE ta.account_classification = 'DAY_ZERO'
-	  	AND fca.policy_bound_timestamp IS NOT NULL
-
+  SELECT
+    ta.account_id,
+    ta.telematics_user_id,
+    ta.user_id,
+    fca.first_trip_recorded_timestamp,
+    l.last_trip_timestamp,
+    fca.day_zero_underwriting_decision_timestamp AS underwriting_decision_timestamp,
+    fca.policy_bound_timestamp AS test_drive_start_date,
+    COALESCE(fca.day_zero_underwriting_decision_timestamp, dateadd(day, 30, test_drive_start_date)) AS test_drive_end_date,
+    DATEDIFF(d, test_drive_start_date, test_drive_end_date) AS test_drive_window,
+    fca.policy_bound_timestamp,
+    fca.final_bind_timestamp,
+    fca.profile_created_timestamp,
+    e.ubi_eligible_date relevant_eligible_date,
+    e.ubi_ptnu relevant_ptnu,
+    CASE WHEN e.ubi_eligible_date IS NULL AND DATEDIFF(d,test_drive_start_date, GETDATE()::DATE) < 30 THEN 'Not Eligible'
+      WHEN e.ubi_eligible_date IS NULL AND DATEDIFF(d,test_drive_start_date, GETDATE()::DATE) >= 30 THEN 'Push To No Use'
+      WHEN DATEDIFF(d, test_drive_start_date, e.ubi_eligible_date) <= 30 AND ubi_ptnu = 0 THEN 'Eligible'
+      WHEN DATEDIFF(d, test_drive_start_date, e.ubi_eligible_date) > 30 OR ubi_ptnu = 1 THEN 'Push To No Use'
+    END AS eligible_flag
+  FROM accounts ta
+      JOIN edw.fact_conversion_accumulating fca ON fca.account_id = ta.account_id AND fca.is_current = TRUE
+      LEFT JOIN eligible e ON ta.telematics_user_id = e.telematics_user_id
+      LEFT JOIN last_trip l ON ta.telematics_user_id = l.telematics_user_id
+  WHERE ta.account_classification = 'DAY_ZERO' AND fca.policy_bound_timestamp IS NOT NULL
 )
 
-	SELECT account_id,
-		telematics_user_id,
-		user_id,
-		first_trip_recorded_timestamp,
-		last_trip_timestamp,
-		underwriting_decision_timestamp,
-		test_drive_start_date,
-		test_drive_end_date,
-		test_drive_window,
-		policy_bound_timestamp,
-		final_bind_timestamp,
-		profile_created_timestamp,
-		relevant_eligible_date,
-		relevant_ptnu,
-		eligible_flag,
-		DATE_TRUNC('hour', sysdate) AS as_of_date
-	FROM telematics_eligibility
-);
-
+  SELECT
+    account_id,
+    telematics_user_id,
+    user_id,
+    first_trip_recorded_timestamp,
+    last_trip_timestamp,
+    underwriting_decision_timestamp,
+    test_drive_start_date,
+    test_drive_end_date,
+    test_drive_window,
+    policy_bound_timestamp,
+    final_bind_timestamp,
+    profile_created_timestamp,
+    relevant_eligible_date,
+    relevant_ptnu,
+    eligible_flag,
+    CURRENT_DATE AS as_of_date
+  FROM telematics_eligibility
